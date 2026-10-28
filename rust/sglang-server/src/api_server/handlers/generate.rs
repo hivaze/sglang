@@ -140,16 +140,21 @@ impl CoreHandle {
     }
 
     async fn prepare_generations(&self, requests: &mut [GenerateRequest]) -> Result<(), CoreError> {
-        prefetch::prefetch_all(
-            requests,
-            &self.inner.mm_limits,
-            self.inner.mm_processor.get(),
-        )
-        .await
-        .map_err(|error| match error {
-            MediaError::Client(message) => CoreError::InvalidArgument(message),
-            MediaError::Server(message) => CoreError::Internal(message),
-        })
+        // A multimodal model's requests wait here until the MM pool starts, so
+        // none is admitted without the processor's media hooks. The wait has
+        // no deadline: the pool starts during launch, and runtime shutdown
+        // cancels a waiting handler with the api runtime.
+        let processor = if self.inner.multimodal {
+            Some(self.inner.mm_processor.wait().await)
+        } else {
+            self.inner.mm_processor.get()
+        };
+        prefetch::prefetch_all(requests, &self.inner.mm_limits, processor)
+            .await
+            .map_err(|error| match error {
+                MediaError::Client(message) => CoreError::InvalidArgument(message),
+                MediaError::Server(message) => CoreError::Internal(message),
+            })
     }
 }
 
